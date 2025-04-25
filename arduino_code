@@ -1,0 +1,130 @@
+#include <Arduino_FreeRTOS.h>
+#include <Key.h>
+#include <Keypad.h>
+#include <Wire.h>
+#include <queue.h>
+#include <LiquidCrystal_I2C.h>
+
+#define TRIGGER_PIN 12
+#define ECHO_PIN 11
+#define BUZZER_PIN 10
+#define LED_PIN 13
+
+QueueHandle_t queue; // File d'attente pour stocker la distance choisie
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Objet pour contrôler l'écran LCD
+
+const byte ROWS = 4;
+const byte COLS = 4;
+char keys[ROWS][COLS] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+byte rowPins[ROWS] = {9, 8, 7, 6};
+byte colPins[COLS] = {5, 4, 3, 2};
+
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+float distanceChoisie = 0.0;
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(TRIGGER_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Distance :");
+
+  // Créer la file d'attente
+  queue = xQueueCreate(5, sizeof(float));
+
+  // Création des tâches
+  xTaskCreate(Clavier, "clavier", 128, NULL, 1, NULL);
+  xTaskCreate(afficher_comparer, "afficher_comparer", 128, NULL, 1, NULL);
+}
+
+void loop() {
+  // Ne fait rien ici car FreeRTOS gère les tâches
+}
+
+// Tâche pour gérer le clavier
+void Clavier(void* pvParameters) {
+  while (1) {
+    char key = keypad.getKey();
+
+    if (key != NO_KEY) {
+      if (isdigit(key)) {
+        distanceChoisie = distanceChoisie * 10.0 + (key - '0');
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(distanceChoisie);
+      }
+      else if (key == '#') {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Distance: ");
+        lcd.print(distanceChoisie);
+        lcd.print(" cm");
+      }
+      else if (key == '*') {
+        distanceChoisie = 0;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Reset: 0");
+      }
+
+      // Envoie la distance dans la file d'attente
+      xQueueSend(queue, &distanceChoisie, portMAX_DELAY);
+    }
+
+    vTaskDelay(100 / portTICK_PERIOD_MS); // Petite pause pour éviter le rebond
+  }
+}
+
+// Tâche pour afficher et comparer la distance
+void afficher_comparer(void* pvParameters) {
+  float duration, distance, valeur_recue;
+
+  while (1) {
+    // Mesure de la distance
+    digitalWrite(TRIGGER_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
+
+    duration = pulseIn(ECHO_PIN, HIGH);
+    distance = (duration * 0.034) / 2;
+
+    // Affichage sur LCD
+    lcd.setCursor(0, 1);
+    lcd.print("Actuel: ");
+    lcd.print(distance);
+    lcd.print(" cm  "); // pour effacer les résidus
+
+    // Lecture de la valeur de consigne depuis la file d’attente
+    if (xQueueReceive(queue, &valeur_recue, portMAX_DELAY) == pdTRUE) {
+      // Comparaison
+      if ((distance >= valeur_recue) && (distance < valeur_recue + 1)) {
+        digitalWrite(LED_PIN, HIGH);
+        tone(BUZZER_PIN, 1000, 1000);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        digitalWrite(LED_PIN, LOW);
+      }
+      else {
+        noTone(BUZZER_PIN);
+      }
+
+      Serial.print("Distance: ");
+      Serial.println(distance);
+    }
+
+    vTaskDelay(500 / portTICK_PERIOD_MS); // Délai entre les mesures
+  }
+}
