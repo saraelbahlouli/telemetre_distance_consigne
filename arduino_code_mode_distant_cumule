@@ -1,0 +1,133 @@
+#include <LiquidCrystal.h>
+
+// Configuration LCD (RS, E, D4, D5, D6, D7)
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+// Capteur et alertes
+const int pingPin = 7;     // Broche du capteur PING
+const int ledPin = 13;     // LED d'alerte
+const int buzzerPin = 10;  // Buzzer d'alerte
+const int buttonPin = 8;   // Bouton pour changer de mode
+
+// Variables de mesure
+const int seuilDistance = 20; // Seuil d'alerte en cm
+float distance = 0;
+float totalDistance = 0;
+bool cumulativeMode = false;
+
+// Variables pour l'alerte
+unsigned long previousMillis = 0;
+const long interval = 500;
+bool ledState = false;
+
+// Variables pour le bouton
+unsigned long lastDebounceTime = 0;
+const long debounceDelay = 50;
+int buttonState;
+int lastButtonState = HIGH;
+
+void setup() {
+  lcd.begin(16, 2);
+  pinMode(ledPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  
+  lcd.print("Mode: Simple");
+  lcd.setCursor(0, 1);
+  lcd.print("Dist: 0.00 cm");
+}
+
+void loop() {
+  // Lecture du bouton avec anti-rebond
+  int reading = digitalRead(buttonPin);
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading != buttonState) {
+      buttonState = reading;
+      if (buttonState == LOW) {
+        toggleMode();
+      }
+    }
+  }
+  lastButtonState = reading;
+
+  // Mesure de distance
+  measureDistance();
+
+  // Affichage
+  displayResults();
+
+  // Gestion des alertes
+  checkAlert();
+
+  delay(200);
+}
+
+void toggleMode() {
+  cumulativeMode = !cumulativeMode;
+  lcd.clear();
+  if (cumulativeMode) {
+    totalDistance = 0;
+    lcd.print("Mode: Cumule");
+  } else {
+    lcd.print("Mode: Simple");
+  }
+}
+
+float measureDistance() {
+  pinMode(pingPin, OUTPUT);
+  digitalWrite(pingPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(pingPin, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(pingPin, LOW);
+
+  pinMode(pingPin, INPUT);
+  long duration = pulseIn(pingPin, HIGH, 30000); // Timeout à 30ms
+
+  if (duration == 0) {
+    distance = 0;
+    return 0;
+  }
+
+  distance = duration / 29.0 / 2.0; // Conversion en cm
+
+  if (cumulativeMode && distance > 0) {
+    totalDistance += distance;
+  }
+
+  return distance;
+}
+
+void displayResults() {
+  lcd.setCursor(0, 1);
+  lcd.print("                "); // Efface la ligne
+
+  lcd.setCursor(0, 1);
+  if (cumulativeMode) {
+    lcd.print("Total:");
+    lcd.print(totalDistance, 1);
+  } else {
+    lcd.print("Dist:");
+    lcd.print(distance, 1);
+  }
+  lcd.print(" cm   ");
+}
+
+void checkAlert() {
+  if (distance < seuilDistance && distance > 0) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= interval) {
+      previousMillis = currentMillis;
+      ledState = !ledState;
+      digitalWrite(ledPin, ledState);
+      digitalWrite(buzzerPin, ledState);
+    }
+  } else {
+    digitalWrite(ledPin, LOW);
+    digitalWrite(buzzerPin, LOW);
+  }
+}
